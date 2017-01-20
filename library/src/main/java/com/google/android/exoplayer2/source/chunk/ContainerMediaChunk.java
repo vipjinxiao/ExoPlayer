@@ -117,7 +117,7 @@ public class ContainerMediaChunk extends BaseMediaChunk implements SeekMapOutput
         // Set the target to ourselves.
         DefaultTrackOutput trackOutput = getTrackOutput();
         trackOutput.formatWithOffset(sampleFormat, sampleOffsetUs);
-        extractorWrapper.init(this, trackOutput);
+        extractorWrapper.init(this, trackOutput, getMetadataTrackOutput());
       }
       // Load and decode the sample data.
       try {

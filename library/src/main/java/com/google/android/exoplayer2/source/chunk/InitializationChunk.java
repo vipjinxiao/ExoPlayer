@@ -18,6 +18,7 @@ package com.google.android.exoplayer2.source.chunk;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.extractor.DefaultExtractorInput;
+import com.google.android.exoplayer2.extractor.DummyTrackOutput;
 import com.google.android.exoplayer2.extractor.Extractor;
 import com.google.android.exoplayer2.extractor.ExtractorInput;
 import com.google.android.exoplayer2.extractor.SeekMap;
@@ -139,7 +140,7 @@ public final class InitializationChunk extends Chunk implements SeekMapOutput,
           loadDataSpec.absoluteStreamPosition, dataSource.open(loadDataSpec));
       if (bytesLoaded == 0) {
         // Set the target to ourselves.
-        extractorWrapper.init(this, this);
+        extractorWrapper.init(this, this, new DummyTrackOutput());
       }
       // Load and decode the initialization data.
       try {

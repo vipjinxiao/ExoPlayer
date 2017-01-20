@@ -28,7 +28,9 @@ import com.google.android.exoplayer2.upstream.DataSpec;
 public abstract class BaseMediaChunk extends MediaChunk {
 
   private DefaultTrackOutput trackOutput;
+  private DefaultTrackOutput metadataTrackOutput;
   private int firstSampleIndex;
+  private int firstMetadataSampleIndex;
 
   /**
    * @param dataSource The source from which the data should be loaded.
@@ -51,26 +53,50 @@ public abstract class BaseMediaChunk extends MediaChunk {
    * Initializes the chunk for loading, setting the {@link DefaultTrackOutput} that will receive
    * samples as they are loaded.
    *
-   * @param trackOutput The output that will receive the loaded samples.
+   * @param trackOutput The output that will receive the loaded media samples.
+   * @param metadataTrackOutput The output that will receive loaded metadata samples, or null if
+   *     such output is not required.
    */
-  public void init(DefaultTrackOutput trackOutput) {
+  public void init(DefaultTrackOutput trackOutput, DefaultTrackOutput metadataTrackOutput) {
     this.trackOutput = trackOutput;
-    this.firstSampleIndex = trackOutput.getWriteIndex();
+    this.metadataTrackOutput = metadataTrackOutput;
+    firstSampleIndex = trackOutput.getWriteIndex();
+    firstMetadataSampleIndex = metadataTrackOutput == null ? 0
+        : metadataTrackOutput.getWriteIndex();
   }
 
   /**
-   * Returns the index of the first sample in the output that was passed to
-   * {@link #init(DefaultTrackOutput)} that will originate from this chunk.
+   * Returns the index of the first sample in the media output that was passed to
+   * {@link #init(DefaultTrackOutput, DefaultTrackOutput)} that will originate from this chunk.
    */
   public final int getFirstSampleIndex() {
     return firstSampleIndex;
   }
 
   /**
-   * Returns the track output most recently passed to {@link #init(DefaultTrackOutput)}.
+   * Returns the index of the first sample in the metadata output that was passed to
+   * {@link #init(DefaultTrackOutput, DefaultTrackOutput)} that will originate from this chunk, or 0
+   * if no metadata output was provided.
+   */
+  public final int getFirstMetadataSampleIndex() {
+    return firstMetadataSampleIndex;
+  }
+
+  /**
+   * Returns the media track output most recently passed to
+   * {@link #init(DefaultTrackOutput, DefaultTrackOutput)}.
    */
   protected final DefaultTrackOutput getTrackOutput() {
     return trackOutput;
+  }
+
+  /**
+   * Returns the metadata track output most recently passed to
+   * {@link #init(DefaultTrackOutput, DefaultTrackOutput)}, or null if no metadata output was
+   * provided.
+   */
+  protected final DefaultTrackOutput getMetadataTrackOutput() {
+    return metadataTrackOutput;
   }
 
 }

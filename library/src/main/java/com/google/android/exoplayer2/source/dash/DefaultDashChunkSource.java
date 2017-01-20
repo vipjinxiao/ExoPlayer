@@ -69,11 +69,11 @@ public class DefaultDashChunkSource implements DashChunkSource {
     @Override
     public DashChunkSource createDashChunkSource(LoaderErrorThrower manifestLoaderErrorThrower,
         DashManifest manifest, int periodIndex, int adaptationSetIndex,
-        TrackSelection trackSelection, long elapsedRealtimeOffsetMs) {
+        TrackSelection trackSelection, long elapsedRealtimeOffsetMs, boolean enableMetadataOutput) {
       DataSource dataSource = dataSourceFactory.createDataSource();
       return new DefaultDashChunkSource(manifestLoaderErrorThrower, manifest, periodIndex,
           adaptationSetIndex, trackSelection, dataSource, elapsedRealtimeOffsetMs,
-          maxSegmentsPerLoad);
+          maxSegmentsPerLoad, enableMetadataOutput);
     }
 
   }
@@ -108,7 +108,8 @@ public class DefaultDashChunkSource implements DashChunkSource {
    */
   public DefaultDashChunkSource(LoaderErrorThrower manifestLoaderErrorThrower,
       DashManifest manifest, int periodIndex, int adaptationSetIndex, TrackSelection trackSelection,
-      DataSource dataSource, long elapsedRealtimeOffsetMs, int maxSegmentsPerLoad) {
+      DataSource dataSource, long elapsedRealtimeOffsetMs, int maxSegmentsPerLoad,
+      boolean enableMetadataOutput) {
     this.manifestLoaderErrorThrower = manifestLoaderErrorThrower;
     this.manifest = manifest;
     this.adaptationSetIndex = adaptationSetIndex;
@@ -123,7 +124,8 @@ public class DefaultDashChunkSource implements DashChunkSource {
     representationHolders = new RepresentationHolder[trackSelection.length()];
     for (int i = 0; i < representationHolders.length; i++) {
       Representation representation = representations.get(trackSelection.getIndexInTrackGroup(i));
-      representationHolders[i] = new RepresentationHolder(periodDurationUs, representation);
+      representationHolders[i] = new RepresentationHolder(periodDurationUs, representation,
+          enableMetadataOutput);
     }
   }
 
@@ -357,6 +359,8 @@ public class DefaultDashChunkSource implements DashChunkSource {
 
     public final ChunkExtractorWrapper extractorWrapper;
 
+    private final boolean enableMetadataOutput;
+
     public Representation representation;
     public DashSegmentIndex segmentIndex;
     public Format sampleFormat;
@@ -364,9 +368,11 @@ public class DefaultDashChunkSource implements DashChunkSource {
     private long periodDurationUs;
     private int segmentNumShift;
 
-    public RepresentationHolder(long periodDurationUs, Representation representation) {
+    public RepresentationHolder(long periodDurationUs, Representation representation,
+        boolean enableMetadataOutput) {
       this.periodDurationUs = periodDurationUs;
       this.representation = representation;
+      this.enableMetadataOutput = enableMetadataOutput;
       String containerMimeType = representation.format.containerMimeType;
       if (mimeTypeIsRawText(containerMimeType)) {
         extractorWrapper = null;
@@ -379,7 +385,8 @@ public class DefaultDashChunkSource implements DashChunkSource {
         } else if (mimeTypeIsWebm(containerMimeType)) {
           extractor = new MatroskaExtractor();
         } else {
-          extractor = new FragmentedMp4Extractor();
+          int flags = enableMetadataOutput ? FragmentedMp4Extractor.FLAG_ENABLE_EMSG_TRACK : 0;
+          extractor = new FragmentedMp4Extractor(flags, null);
         }
         // Prefer drmInitData obtained from the manifest over drmInitData obtained from the stream,
         // as per DASH IF Interoperability Recommendations V3.0, 7.5.3.

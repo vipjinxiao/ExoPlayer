@@ -130,7 +130,7 @@ public final class MetadataRenderer extends BaseRenderer implements Callback {
       }
     }
 
-    if (pendingMetadata != null && pendingMetadataTimestamp <= positionUs) {
+    if (pendingMetadata != null && (pendingMetadataTimestamp - 100000) <= positionUs) {
       invokeRenderer(pendingMetadata);
       pendingMetadata = null;
     }

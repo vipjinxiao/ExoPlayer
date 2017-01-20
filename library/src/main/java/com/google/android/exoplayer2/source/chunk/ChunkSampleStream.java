@@ -31,29 +31,34 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 
+// TODO: Rename this class. It's no longer a SampleStream.
 /**
- * A {@link SampleStream} that loads media in {@link Chunk}s, obtained from a {@link ChunkSource}.
+ * Loads media in {@link Chunk}s obtained from a {@link ChunkSource}, and exposes
+ * {@link SampleStream}s from which the loaded media can be read.
  */
 public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, SequenceableLoader,
     Loader.Callback<Chunk> {
 
-  private final int trackType;
-  private final T chunkSource;
+  public final SampleStream metadataSampleStream;
+
+  /* package */ final int trackType;
+  /* package */ final T chunkSource;
   private final SequenceableLoader.Callback<ChunkSampleStream<T>> callback;
-  private final EventDispatcher eventDispatcher;
+  /* package */ final EventDispatcher eventDispatcher;
   private final int minLoadableRetryCount;
-  private final LinkedList<BaseMediaChunk> mediaChunks;
+  /* package */ final LinkedList<BaseMediaChunk> mediaChunks;
   private final List<BaseMediaChunk> readOnlyMediaChunks;
-  private final DefaultTrackOutput sampleQueue;
+  /* package */ final DefaultTrackOutput sampleQueue;
+  /* package */ final DefaultTrackOutput metadataSampleQueue;
   private final ChunkHolder nextChunkHolder;
-  private final Loader loader;
+  /* package */ final Loader loader;
 
-  private Format downstreamTrackFormat;
+  /* package */ Format downstreamTrackFormat;
 
-  private long lastSeekPositionUs;
+  /* package */ long lastSeekPositionUs;
   private long pendingResetPositionUs;
 
-  private boolean loadingFinished;
+  /* package */ boolean loadingFinished;
 
   /**
    * @param trackType The type of the track. One of the {@link C} {@code TRACK_TYPE_*} constants.
@@ -68,6 +73,24 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
   public ChunkSampleStream(int trackType, T chunkSource,
       SequenceableLoader.Callback<ChunkSampleStream<T>> callback, Allocator allocator,
       long positionUs, int minLoadableRetryCount, EventDispatcher eventDispatcher) {
+    this(trackType, chunkSource, callback, allocator, positionUs, minLoadableRetryCount,
+        eventDispatcher, false);
+  }
+
+  /**
+   * @param trackType The type of the track. One of the {@link C} {@code TRACK_TYPE_*} constants.
+   * @param chunkSource A {@link ChunkSource} from which chunks to load are obtained.
+   * @param callback An {@link Callback} for the stream.
+   * @param allocator An {@link Allocator} from which allocations can be obtained.
+   * @param positionUs The position from which to start loading media.
+   * @param minLoadableRetryCount The minimum number of times that the source should retry a load
+   *     before propagating an error.
+   * @param eventDispatcher A dispatcher to notify of events.
+   */
+  public ChunkSampleStream(int trackType, T chunkSource,
+      SequenceableLoader.Callback<ChunkSampleStream<T>> callback, Allocator allocator,
+      long positionUs, int minLoadableRetryCount, EventDispatcher eventDispatcher,
+      boolean enableMetadataStream) {
     this.trackType = trackType;
     this.chunkSource = chunkSource;
     this.callback = callback;
@@ -80,6 +103,22 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     sampleQueue = new DefaultTrackOutput(allocator);
     lastSeekPositionUs = positionUs;
     pendingResetPositionUs = positionUs;
+    if (enableMetadataStream) {
+      metadataSampleQueue = new DefaultTrackOutput(allocator);
+      metadataSampleStream = new MetadataSampleStreamImpl();
+    } else {
+      metadataSampleQueue = null;
+      metadataSampleStream = null;
+    }
+  }
+
+  int id;
+  public void setId(int id) {
+    this.id = id;
+  }
+
+  public int getId() {
+    return id;
   }
 
   /**
@@ -125,6 +164,9 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     boolean seekInsideBuffer = !isPendingReset()
         && sampleQueue.skipToKeyframeBefore(positionUs, positionUs < getNextLoadPositionUs());
     if (seekInsideBuffer) {
+      if (metadataSampleQueue != null) {
+        metadataSampleQueue.skipToKeyframeBefore(positionUs);
+      }
       // We succeeded. All we need to do is discard any chunks that we've moved past.
       while (mediaChunks.size() > 1
           && mediaChunks.get(1).getFirstSampleIndex() <= sampleQueue.getReadIndex()) {
@@ -139,6 +181,9 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
         loader.cancelLoading();
       } else {
         sampleQueue.reset(true);
+        if (metadataSampleQueue != null) {
+          metadataSampleQueue.reset(true);
+        }
       }
     }
   }
@@ -150,6 +195,9 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
    */
   public void release() {
     sampleQueue.disable();
+    if (metadataSampleQueue != null) {
+      metadataSampleQueue.disable();
+    }
     loader.release();
   }
 
@@ -275,7 +323,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     if (isMediaChunk(loadable)) {
       pendingResetPositionUs = C.TIME_UNSET;
       BaseMediaChunk mediaChunk = (BaseMediaChunk) loadable;
-      mediaChunk.init(sampleQueue);
+      mediaChunk.init(sampleQueue, metadataSampleQueue);
       mediaChunks.add(mediaChunk);
     }
     long elapsedRealtimeMs = loader.startLoading(loadable, this, minLoadableRetryCount);
@@ -312,7 +360,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     return chunk instanceof BaseMediaChunk;
   }
 
-  private boolean isPendingReset() {
+  /* package */ boolean isPendingReset() {
     return pendingResetPositionUs != C.TIME_UNSET;
   }
 
@@ -336,8 +384,42 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
       loadingFinished = false;
     }
     sampleQueue.discardUpstreamSamples(removed.getFirstSampleIndex());
+    if (metadataSampleQueue != null) {
+      metadataSampleQueue.discardUpstreamSamples(removed.getFirstMetadataSampleIndex());
+    }
     eventDispatcher.upstreamDiscarded(trackType, startTimeUs, endTimeUs);
     return true;
+  }
+
+  public final class MetadataSampleStreamImpl implements SampleStream {
+
+    @Override
+    public boolean isReady() {
+      return loadingFinished || (!isPendingReset() && !metadataSampleQueue.isEmpty());
+    }
+
+    @Override
+    public void maybeThrowError() throws IOException {
+      loader.maybeThrowError();
+      if (!loader.isLoading()) {
+        chunkSource.maybeThrowError();
+      }
+    }
+
+    @Override
+    public int readData(FormatHolder formatHolder, DecoderInputBuffer buffer) {
+      if (isPendingReset()) {
+        return C.RESULT_NOTHING_READ;
+      }
+      return metadataSampleQueue.readData(formatHolder, buffer, loadingFinished,
+          lastSeekPositionUs);
+    }
+
+    @Override
+    public void skipToKeyframeBefore(long timeUs) {
+      metadataSampleQueue.skipToKeyframeBefore(timeUs);
+    }
+
   }
 
 }

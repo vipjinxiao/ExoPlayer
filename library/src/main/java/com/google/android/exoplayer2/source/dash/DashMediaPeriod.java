@@ -19,6 +19,7 @@ import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.source.AdaptiveMediaSourceEventListener.EventDispatcher;
 import com.google.android.exoplayer2.source.CompositeSequenceableLoader;
+import com.google.android.exoplayer2.source.EmptySampleStream;
 import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.source.SampleStream;
 import com.google.android.exoplayer2.source.SequenceableLoader;
@@ -32,6 +33,7 @@ import com.google.android.exoplayer2.source.dash.manifest.Representation;
 import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.upstream.LoaderErrorThrower;
+import com.google.android.exoplayer2.util.MimeTypes;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -115,10 +117,12 @@ import java.util.List;
   public long selectTracks(TrackSelection[] selections, boolean[] mayRetainStreamFlags,
       SampleStream[] streams, boolean[] streamResetFlags, long positionUs) {
     ArrayList<ChunkSampleStream<DashChunkSource>> sampleStreamsList = new ArrayList<>();
+    // First pass for primary streams.
     for (int i = 0; i < selections.length; i++) {
-      if (streams[i] != null) {
+      if (streams[i] instanceof ChunkSampleStream) {
         @SuppressWarnings("unchecked")
-        ChunkSampleStream<DashChunkSource> stream = (ChunkSampleStream<DashChunkSource>) streams[i];
+        ChunkSampleStream<DashChunkSource> stream =
+            (ChunkSampleStream<DashChunkSource>) streams[i];
         if (selections[i] == null || !mayRetainStreamFlags[i]) {
           stream.release();
           streams[i] = null;
@@ -126,10 +130,36 @@ import java.util.List;
           sampleStreamsList.add(stream);
         }
       }
-      if (streams[i] == null && selections[i] != null) {
+      if (streams[i] == null && selections[i] != null
+          && trackGroups.indexOf(selections[i].getTrackGroup()) < period.adaptationSets.size()) {
         ChunkSampleStream<DashChunkSource> stream = buildSampleStream(selections[i], positionUs);
         sampleStreamsList.add(stream);
         streams[i] = stream;
+        streamResetFlags[i] = true;
+      }
+    }
+    // Second pass for metadata.
+    for (int i = 0; i < selections.length; i++) {
+      if (streams[i] != null) {
+        if (streams[i] instanceof ChunkSampleStream.MetadataSampleStreamImpl) {
+          streams[i] = null;
+        }
+      }
+      if (streams[i] == null && selections[i] != null
+          && trackGroups.indexOf(selections[i].getTrackGroup()) >= period.adaptationSets.size()) {
+        int adaptationSetIndex = Integer.parseInt(selections[i].getFormat(0).id);
+        // See if the adaptation set is enabled.
+        for (ChunkSampleStream<DashChunkSource> primary : sampleStreamsList) {
+          if (primary.getId() == adaptationSetIndex) {
+            streams[i] = primary.metadataSampleStream;
+            break;
+          }
+        }
+        if (streams[i] == null) {
+          // Primary not enabled.
+          streams[i] = new EmptySampleStream(Format.createSampleFormat("emsg",
+              MimeTypes.APPLICATION_EMSG, Format.OFFSET_SAMPLE_RELATIVE));
+        }
         streamResetFlags[i] = true;
       }
     }
@@ -184,15 +214,36 @@ import java.util.List;
   // Internal methods.
 
   private static TrackGroupArray buildTrackGroups(Period period) {
-    TrackGroup[] trackGroupArray = new TrackGroup[period.adaptationSets.size()];
+    int inbandEventStreamTrackCount = 0;
+    for (int i = 0; i < period.adaptationSets.size(); i++) {
+      List<Representation> representations = period.adaptationSets.get(i).representations;
+      for (int j = 0; j < representations.size(); j++) {
+        Representation representation = representations.get(j);
+        if (!representation.inbandEventStreams.isEmpty()) {
+          inbandEventStreamTrackCount++;
+          break;
+        }
+      }
+    }
+    TrackGroup[] trackGroupArray = new TrackGroup[period.adaptationSets.size()
+        + inbandEventStreamTrackCount];
+    inbandEventStreamTrackCount = 0;
     for (int i = 0; i < period.adaptationSets.size(); i++) {
       AdaptationSet adaptationSet = period.adaptationSets.get(i);
       List<Representation> representations = adaptationSet.representations;
       Format[] formats = new Format[representations.size()];
+      boolean includesInbandEventStreams = false;
       for (int j = 0; j < formats.length; j++) {
-        formats[j] = representations.get(j).format;
+        Representation representation = representations.get(j);
+        formats[j] = representation.format;
+        includesInbandEventStreams |= !representation.inbandEventStreams.isEmpty();
       }
       trackGroupArray[i] = new TrackGroup(formats);
+      if (includesInbandEventStreams) {
+        trackGroupArray[period.adaptationSets.size() + inbandEventStreamTrackCount++]
+            = new TrackGroup(Format.createSampleFormat(Integer.toString(i),
+            MimeTypes.APPLICATION_EMSG, null, Format.NO_VALUE, null));
+      }
     }
     return new TrackGroupArray(trackGroupArray);
   }
@@ -203,9 +254,9 @@ import java.util.List;
     AdaptationSet adaptationSet = period.adaptationSets.get(adaptationSetIndex);
     DashChunkSource chunkSource = chunkSourceFactory.createDashChunkSource(
         manifestLoaderErrorThrower, manifest, index, adaptationSetIndex, selection,
-        elapsedRealtimeOffset);
+        elapsedRealtimeOffset, true);
     return new ChunkSampleStream<>(adaptationSet.type, chunkSource, this, allocator, positionUs,
-        minLoadableRetryCount, eventDispatcher);
+        minLoadableRetryCount, eventDispatcher, true);
   }
 
   @SuppressWarnings("unchecked")

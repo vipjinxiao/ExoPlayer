@@ -56,7 +56,9 @@ public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput
   private boolean extractorInitialized;
   private SeekMapOutput seekMapOutput;
   private TrackOutput trackOutput;
+  private TrackOutput metadataTrackOutput;
   private Format sentFormat;
+  private Format sentMetadataFormat;
 
   // Accessed only on the loader thread.
   private boolean seenTrack;
@@ -69,7 +71,7 @@ public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput
    * @param preferManifestDrmInitData Whether {@link DrmInitData} defined in {@code manifestFormat}
    *     should be preferred when the sample and manifest {@link Format}s are merged.
    * @param resendFormatOnInit Whether the extractor should resend the previous {@link Format} when
-   *     it is initialized via {@link #init(SeekMapOutput, TrackOutput)}.
+   *     it is initialized via {@link #init(SeekMapOutput, TrackOutput, TrackOutput)}.
    */
   public ChunkExtractorWrapper(Extractor extractor, Format manifestFormat,
       boolean preferManifestDrmInitData, boolean resendFormatOnInit) {
@@ -86,9 +88,11 @@ public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput
    * @param seekMapOutput The {@link SeekMapOutput} that will receive extracted {@link SeekMap}s.
    * @param trackOutput The {@link TrackOutput} that will receive sample data.
    */
-  public void init(SeekMapOutput seekMapOutput, TrackOutput trackOutput) {
+  public void init(SeekMapOutput seekMapOutput, TrackOutput trackOutput,
+      TrackOutput metadataTrackOutput) {
     this.seekMapOutput = seekMapOutput;
     this.trackOutput = trackOutput;
+    this.metadataTrackOutput = metadataTrackOutput;
     if (!extractorInitialized) {
       extractor.init(this);
       extractorInitialized = true;
@@ -97,6 +101,9 @@ public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput
       if (resendFormatOnInit && sentFormat != null) {
         trackOutput.format(sentFormat);
       }
+      if (metadataTrackOutput != null) {
+        metadataTrackOutput.format(sentMetadataFormat);
+      }
     }
   }
 
@@ -104,6 +111,10 @@ public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput
 
   @Override
   public TrackOutput track(int id) {
+    // TODO: How can we guarantee this?
+    if (id != 0) {
+      return new MetadataTrackOutput();
+    }
     Assertions.checkState(!seenTrack || seenTrackId == id);
     seenTrack = true;
     seenTrackId = id;
@@ -143,6 +154,33 @@ public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput
   public void sampleMetadata(long timeUs, @C.BufferFlags int flags, int size, int offset,
       byte[] encryptionKey) {
     trackOutput.sampleMetadata(timeUs, flags, size, offset, encryptionKey);
+  }
+
+  private class MetadataTrackOutput implements TrackOutput {
+
+    @Override
+    public void format(Format format) {
+      sentMetadataFormat = format;
+      metadataTrackOutput.format(sentFormat);
+    }
+
+    @Override
+    public int sampleData(ExtractorInput input, int length, boolean allowEndOfInput)
+        throws IOException, InterruptedException {
+      return metadataTrackOutput.sampleData(input, length, allowEndOfInput);
+    }
+
+    @Override
+    public void sampleData(ParsableByteArray data, int length) {
+      metadataTrackOutput.sampleData(data, length);
+    }
+
+    @Override
+    public void sampleMetadata(long timeUs, @C.BufferFlags int flags, int size, int offset,
+        byte[] encryptionKey) {
+      metadataTrackOutput.sampleMetadata(timeUs, flags, size, offset, encryptionKey);
+    }
+
   }
 
 }
