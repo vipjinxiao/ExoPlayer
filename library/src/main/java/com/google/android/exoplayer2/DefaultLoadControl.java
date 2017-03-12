@@ -177,6 +177,7 @@ public final class DefaultLoadControl implements LoadControl {
   @Override
   public boolean shouldContinueLoading(long bufferedDurationUs) {
     int bufferTimeState = getBufferTimeState(bufferedDurationUs);
+    // targetBufferSize默认值为15.875MB
     boolean targetBufferSizeReached = allocator.getTotalBytesAllocated() >= targetBufferSize;
     boolean wasBuffering = isBuffering;
     isBuffering = bufferTimeState == BELOW_LOW_WATERMARK

@@ -175,6 +175,8 @@ import java.io.IOException;
     return tracks;
   }
 
+  // ExoPlayerImplInternal中使用TrackSelector选择好track后调用，将每个track对应的SampleStream赋值为自身实现的SampleStreamImpl
+  // 另外，此处作为prepared之后的第一处调用，如果positionUs不为0，在此处调用seekToUs()实现seek操作
   @Override
   public long selectTracks(TrackSelection[] selections, boolean[] mayRetainStreamFlags,
       SampleStream[] streams, boolean[] streamResetFlags, long positionUs) {
@@ -286,6 +288,8 @@ import java.io.IOException;
         : largestQueuedTimestampUs;
   }
 
+  // 可能被selectTracks()或是ExoPlayerImplInternal的seekToPeriodPosition()方法直接调用
+  // 先尝试在sampleQueues中直接seek，如果未在sampleQueues中seek，则会cancel掉当前的load任务，然后设置其pendingResetPositionUs，走continueLoad()的路子
   @Override
   public long seekToUs(long positionUs) {
     // Treat all seeks into non-seekable media as being to t=0.
@@ -411,7 +415,7 @@ import java.io.IOException;
   }
 
   // Internal methods.
-
+  // 经Extractor调用track()、endTracks()、seekMap()、TrackOutput.format()->onUpstreamFormatChanged()后到达
   private void maybeFinishPrepare() {
     if (released || prepared || seekMap == null || !tracksBuilt) {
       return;
@@ -422,6 +426,7 @@ import java.io.IOException;
         return;
       }
     }
+    // 完成prepare时先close，等待continueLoading
     loadCondition.close();
     TrackGroup[] trackArray = new TrackGroup[trackCount];
     trackIsAudioVideoFlags = new boolean[trackCount];
@@ -448,6 +453,8 @@ import java.io.IOException;
     }
   }
 
+  // prepare()与continueLoading()均会调用，每次均会new新的ExtractingLoadable
+  // 如果是之前调用过seekToUs()与continueLoading()的情况，会对ExtractingLoadable的loadPosition进行set
   private void startLoading() {
     ExtractingLoadable loadable = new ExtractingLoadable(uri, dataSource, extractorHolder,
         loadCondition);
@@ -616,6 +623,7 @@ import java.io.IOException;
     @Override
     public void load() throws IOException, InterruptedException {
       int result = Extractor.RESULT_CONTINUE;
+      // 里层while循环可能SEEK转CONTINUE
       while (result == Extractor.RESULT_CONTINUE && !loadCanceled) {
         ExtractorInput input = null;
         try {
@@ -635,6 +643,7 @@ import java.io.IOException;
             result = extractor.read(input, positionHolder);
             if (input.getPosition() > position + CONTINUE_LOADING_CHECK_INTERVAL_BYTES) {
               position = input.getPosition();
+              // 每load 1M数据，先close，等待continueLoading，因为LoadControl判断暂时不需要continueLoading
               loadCondition.close();
               handler.post(onContinueLoadingRequestedRunnable);
             }

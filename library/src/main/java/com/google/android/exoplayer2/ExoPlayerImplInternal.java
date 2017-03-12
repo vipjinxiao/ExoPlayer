@@ -442,6 +442,14 @@ import java.io.IOException;
         : bufferedPositionUs;
   }
 
+  // 在prepared前(即playingPeriodHolder为空)仅更新period
+  // 在prepared后，除了更新period进度外，步骤为：
+  //    1. 更新playbackPosition
+  //    2. renderer.render()
+  //    3. 检查已在播放的是否进入STATE_END状态
+  //    4. 检查BUFFERING状态的是否进入READY状态
+  //    5. 检查READY状态的是否进入BUFFERING状态
+  //    6. 根据相应状态scheduleNextWork
   private void doSomeWork() throws ExoPlaybackException, IOException {
     long operationStartTimeMs = SystemClock.elapsedRealtime();
     updatePeriods();
@@ -1091,6 +1099,7 @@ import java.io.IOException;
     return Pair.create(periodIndex, periodPositionUs);
   }
 
+  // 每次doSomeWork都会调用，对于SinglePeriodTimeline来说主要是更新LoadingPeriod，包括触发以及跟踪其loading状态
   private void updatePeriods() throws ExoPlaybackException, IOException {
     if (timeline == null) {
       // We're waiting to get information about periods.
@@ -1187,6 +1196,7 @@ import java.io.IOException;
     }
   }
 
+  // 对于SinglePeriodTimeline来说，仅会调用一次，即初始构建LoadingPeriod
   private void maybeUpdateLoadingPeriod() throws IOException {
     int newLoadingPeriodIndex;
     if (loadingPeriodHolder == null) {
@@ -1261,6 +1271,10 @@ import java.io.IOException;
     setIsLoading(true);
   }
 
+  // 1. 用TrackSelector完成trackSelect，同时将track的sampleStream设置为ExtractorMediaPeriod提供的SampleStreamImpl，如果需要seek，使ExtractorMediaPeriod实现seek
+  // 2. 设置rendererPosition
+  // 3. 设置PlayingPeriodHolder，从此可以在doSomeWork()中走通完整流程
+  // 4. 调用maybeContinueLoading()，因为之前在ExtractorMediaPeriod的maybeFinishPrepare()中loadCondition已经close了，另外也可能因为seek需要重启load
   private void handlePeriodPrepared(MediaPeriod period) throws ExoPlaybackException {
     if (loadingPeriodHolder == null || loadingPeriodHolder.mediaPeriod != period) {
       // Stale event.
@@ -1284,6 +1298,7 @@ import java.io.IOException;
     maybeContinueLoading();
   }
 
+  // 根据ExtractorMediaPeriod的nextLoadPosition减去当前的loadingPeriodPositionUs得到bufferedDurationUs，然后通过LoadControl的shouldContinueLoading()方法确定是否需要continueLoading
   private void maybeContinueLoading() {
     long nextLoadPositionUs = !loadingPeriodHolder.prepared ? 0
         : loadingPeriodHolder.mediaPeriod.getNextLoadPositionUs();
